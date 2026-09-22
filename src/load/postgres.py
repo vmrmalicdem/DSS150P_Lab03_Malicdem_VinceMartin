@@ -61,3 +61,32 @@ def load_partition(df, year: int, month: int, run_id: str) -> int:
             )
         conn.commit()
     return rows_loaded
+
+
+def upsert_pipeline_run(
+    run_id: str, status: str, rows_staging=None, rows_curated=None,
+    rows_quarantined=None, message=None, started_at=None, completed_at=None,
+) -> None:
+    """Record one row of run evidence in audit.pipeline_runs."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO audit.pipeline_runs
+                    (pipeline_run_id, started_at_utc, completed_at_utc, status,
+                     rows_staging, rows_curated, rows_quarantined, message)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (pipeline_run_id) DO UPDATE SET
+                    completed_at_utc = EXCLUDED.completed_at_utc,
+                    status = EXCLUDED.status,
+                    rows_staging = EXCLUDED.rows_staging,
+                    rows_curated = EXCLUDED.rows_curated,
+                    rows_quarantined = EXCLUDED.rows_quarantined,
+                    message = EXCLUDED.message
+                """,
+                (
+                    run_id, started_at or datetime.now(timezone.utc), completed_at,
+                    status, rows_staging, rows_curated, rows_quarantined, message,
+                ),
+            )
+        conn.commit()

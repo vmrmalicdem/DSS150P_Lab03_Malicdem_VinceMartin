@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.config import PROJECT_ROOT, DB, SETTINGS, path_for
-from src.common.audit import new_run_id
+from src.common.audit import new_run_id, utc_now_iso
 from src.extract.files import extract_sources
 from src.transform.staging import build_staging
 from src.transform.curated import build_curated
@@ -30,6 +30,59 @@ def latest_raw_dir() -> Path:
     return raw_dir / f"run_id={pointer.read_text(encoding='utf-8').strip()}"
 
 
+def do_extract(run_id):
+    raw_dir = extract_sources(run_id)
+    print(f"Extracted sources into {raw_dir}")
+    return raw_dir
+
+
+def do_transform(run_id):
+    raw_dir = latest_raw_dir()
+    staging, staging_q = build_staging(raw_dir, run_id)
+
+    staging_dir = path_for("staging_dir")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    for name, frame in staging.items():
+        frame.to_parquet(staging_dir / f"{name}.parquet", index=False)
+
+    curated, curated_q = build_curated(staging, run_id)
+    curated_dir = path_for("curated_dir")
+    curated_dir.mkdir(parents=True, exist_ok=True)
+    curated.to_parquet(curated_dir / "sales_order_lines.parquet", index=False)
+
+    quarantine = pd.concat([staging_q, curated_q], ignore_index=True)
+    quarantine_dir = path_for("quarantine_dir")
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    quarantine.to_csv(quarantine_dir / f"quarantine_{run_id}.csv", index=False)
+
+    rows_staging = sum(len(f) for f in staging.values())
+    print(f"Staging rows: {rows_staging}")
+    print(f"Curated rows: {len(curated)}")
+    print(f"Quarantined rows: {len(quarantine)}")
+    return staging, curated, quarantine
+
+
+def do_load(run_id):
+    from src.load.postgres import upsert_curated
+    curated_path = path_for("curated_dir") / "sales_order_lines.parquet"
+    curated = pd.read_parquet(curated_path)
+    affected = upsert_curated(curated, run_id)
+    print(f"Upserted {affected} rows into curated.sales_order_lines")
+    return affected
+
+
+def do_validate():
+    curated_path = path_for("curated_dir") / "sales_order_lines.parquet"
+    curated = pd.read_parquet(curated_path)
+    errors = validate_curated(curated)
+    if errors:
+        print("VALIDATION FAILED:")
+        for err in errors:
+            print(f" - {err}")
+        raise SystemExit(1)
+    print(f"Validation passed for {len(curated)} curated rows.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DSS150P modular pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -50,56 +103,19 @@ def main():
         return
 
     if args.command == "extract":
-        run_id = current_run_id()
-        raw_dir = extract_sources(run_id)
-        print(f"Extracted sources into {raw_dir}")
+        do_extract(current_run_id())
         return
 
     if args.command == "transform":
-        run_id = current_run_id()
-        raw_dir = latest_raw_dir()
-        staging, staging_q = build_staging(raw_dir, run_id)
-
-        staging_dir = path_for("staging_dir")
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        for name, frame in staging.items():
-            frame.to_parquet(staging_dir / f"{name}.parquet", index=False)
-
-        curated, curated_q = build_curated(staging, run_id)
-        curated_dir = path_for("curated_dir")
-        curated_dir.mkdir(parents=True, exist_ok=True)
-        curated.to_parquet(curated_dir / "sales_order_lines.parquet", index=False)
-
-        quarantine = pd.concat([staging_q, curated_q], ignore_index=True)
-        quarantine_dir = path_for("quarantine_dir")
-        quarantine_dir.mkdir(parents=True, exist_ok=True)
-        quarantine.to_csv(quarantine_dir / f"quarantine_{run_id}.csv", index=False)
-
-        rows_staging = sum(len(f) for f in staging.values())
-        print(f"Staging rows: {rows_staging}")
-        print(f"Curated rows: {len(curated)}")
-        print(f"Quarantined rows: {len(quarantine)}")
+        do_transform(current_run_id())
         return
 
     if args.command == "validate":
-        curated_path = path_for("curated_dir") / "sales_order_lines.parquet"
-        curated = pd.read_parquet(curated_path)
-        errors = validate_curated(curated)
-        if errors:
-            print("VALIDATION FAILED:")
-            for err in errors:
-                print(f" - {err}")
-            raise SystemExit(1)
-        print(f"Validation passed for {len(curated)} curated rows.")
+        do_validate()
         return
 
     if args.command == "load":
-        from src.load.postgres import upsert_curated
-        run_id = current_run_id()
-        curated_path = path_for("curated_dir") / "sales_order_lines.parquet"
-        curated = pd.read_parquet(curated_path)
-        affected = upsert_curated(curated, run_id)
-        print(f"Upserted {affected} rows into curated.sales_order_lines")
+        do_load(current_run_id())
         return
 
     if args.command == "benchmark":
@@ -134,8 +150,33 @@ def main():
         print(f"Loaded {rows} rows for partition {args.year}-{args.month:02d}")
         return
 
-    # TODO: Wire run-all
-    raise NotImplementedError(f"Wire command: {args.command}")
+    if args.command == "run-all":
+        from src.load.postgres import upsert_pipeline_run
+        run_id = current_run_id()
+        started = utc_now_iso()
+        try:
+            do_extract(run_id)
+            staging, curated, quarantine = do_transform(run_id)
+            do_load(run_id)
+            do_validate()
+        except Exception as exc:
+            try:
+                upsert_pipeline_run(run_id, status="FAILED", message=str(exc), started_at=started)
+            except Exception as audit_exc:
+                print(f"Warning: could not record failed run: {audit_exc}")
+            raise
+        else:
+            rows_staging = sum(len(f) for f in staging.values())
+            try:
+                upsert_pipeline_run(
+                    run_id, status="SUCCESS",
+                    rows_staging=rows_staging, rows_curated=len(curated),
+                    rows_quarantined=len(quarantine),
+                    started_at=started, completed_at=utc_now_iso(), message="ok",
+                )
+            except Exception as exc:
+                print(f"Warning: could not record pipeline_runs audit row: {exc}")
+        return
 
 
 if __name__ == "__main__":
