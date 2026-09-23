@@ -21,30 +21,47 @@ def _connect():
 
 
 def upsert_curated(df, run_id: str) -> int:
+    """Load curated.sales_order_lines using rerun-safe UPSERT semantics.
+
+    Returns the number of rows Postgres actually inserted or updated, not the
+    number submitted. On a rerun with unchanged data, the WHERE clause on
+    record_hash means ON CONFLICT DO UPDATE does not fire, and RETURNING
+    correctly reports 0 for those rows -- unlike counting submitted rows,
+    which stays the same (misleadingly) whether anything actually changed.
+    """
     if df.empty:
         return 0
+
     cols = CURATED_COLUMNS
     placeholders = ", ".join(f"%({c})s" for c in cols)
     col_list = ", ".join(cols)
     update_cols = [c for c in cols if c != "order_id"]
     update_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+
     sql = f"""
         INSERT INTO curated.sales_order_lines ({col_list})
         VALUES ({placeholders})
         ON CONFLICT (order_id) DO UPDATE SET {update_clause}
         WHERE curated.sales_order_lines.record_hash <> EXCLUDED.record_hash
+        RETURNING order_id
     """
     records = df[cols].to_dict(orient="records")
+    written = 0
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.executemany(sql, records)
+            cur.executemany(sql, records, returning=True)
+            while True:
+                written += len(cur.fetchall())
+                if not cur.nextset():
+                    break
         conn.commit()
-    return len(records)
+    return written
 
 
 def load_partition(df, year: int, month: int, run_id: str) -> int:
     subset = df[CURATED_COLUMNS]
-    rows_loaded = upsert_curated(subset, run_id)
+    rows_written = upsert_curated(subset, run_id)
+
     partition_key = f"{year:04d}-{month:02d}"
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -57,17 +74,16 @@ def load_partition(df, year: int, month: int, run_id: str) -> int:
                     row_count = EXCLUDED.row_count,
                     pipeline_run_id = EXCLUDED.pipeline_run_id
                 """,
-                (partition_key, datetime.now(timezone.utc), rows_loaded, run_id),
+                (partition_key, datetime.now(timezone.utc), len(df), run_id),
             )
         conn.commit()
-    return rows_loaded
+    return rows_written
 
 
 def upsert_pipeline_run(
     run_id: str, status: str, rows_staging=None, rows_curated=None,
     rows_quarantined=None, message=None, started_at=None, completed_at=None,
 ) -> None:
-    """Record one row of run evidence in audit.pipeline_runs."""
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
