@@ -8,6 +8,7 @@ data/raw/
 data/staging/
 data/curated/
 data/quarantine/
-data/benchmarks/
+data/benchmarks/*
+!data/benchmarks/benchmark_results.csv
 data/partitioned/
 logs/

@@ -1,0 +1,5 @@
+storage_type,file_size_bytes,write_seconds,full_read_seconds,filtered_read_seconds,row_count,notes
+csv,15276675,1.35047460000078,0.2987972999999329,0.2726603000000978,49897,filtered rows=8355
+json_lines,30707468,0.9250038000000131,0.7500488999994559,0.9093063999998776,49897,filtered rows=8355
+parquet_snappy,5466903,0.2639380999999048,0.082342200000312,0.05542830000013055,49897,filtered rows=8355
+postgresql,16564224,,0.8365254000000277,0.10327690000030998,49897,"size via pg_total_relation_size; filtered rows=8355; write time not comparable here, see load command timing"
