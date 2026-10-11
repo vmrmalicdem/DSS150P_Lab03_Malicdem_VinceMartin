@@ -98,6 +98,4 @@ time). Step by step results are in `docs/run_evidence.md`.
   not a bulk load, so it is not a pure storage comparison.
 
 ## AI assistance
-I used Claude (Anthropic) for code generation, debugging and drafting documentation in this
-lab. I ran and verified the pipeline, tests, Docker setup and Airflow runs myself and I
-am responsible for everything submitted.
+I used AI to guide me through the lab and to learn each step, and it also helped generate and debug parts of the code and draft documentation. I reviewed these changes, ran and verified the pipeline, tests, Docker setup and Airflow runs myself, and I am responsible for everything submitted.

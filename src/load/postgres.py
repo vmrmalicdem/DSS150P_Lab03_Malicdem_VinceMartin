@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 import psycopg
 
@@ -16,6 +16,8 @@ CURATED_COLUMNS = [
 
 
 def _connect():
+    if not DB['password']:
+        raise RuntimeError('POSTGRES_PASSWORD is not set. Copy .env.example to .env and set it.')
     return psycopg.connect(
         host=DB["host"], port=DB["port"], dbname=DB["dbname"],
         user=DB["user"], password=DB["password"],
