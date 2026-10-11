@@ -4,6 +4,8 @@ import psycopg
 
 from src.config import DB
 
+CURATED_TABLE = "curated.sales_order_lines"
+
 CURATED_COLUMNS = [
     "order_id", "customer_id", "product_id", "order_timestamp",
     "customer_city", "customer_tier", "product_name", "category", "brand",
@@ -20,14 +22,12 @@ def _connect():
     )
 
 
-def upsert_curated(df, run_id: str) -> int:
-    """Load curated.sales_order_lines using rerun-safe UPSERT semantics.
+def upsert_curated(df, run_id: str, table: str = CURATED_TABLE) -> int:
+    """Rerun-safe UPSERT keyed on order_id.
 
-    Returns the number of rows Postgres actually inserted or updated, not the
-    number submitted. On a rerun with unchanged data, the WHERE clause on
-    record_hash means ON CONFLICT DO UPDATE does not fire, and RETURNING
-    correctly reports 0 for those rows -- unlike counting submitted rows,
-    which stays the same (misleadingly) whether anything actually changed.
+    Returns the number of rows Postgres actually inserted or updated. Rows whose
+    record_hash already matches are skipped by the WHERE clause and are not
+    returned by RETURNING, so an unchanged rerun reports 0.
     """
     if df.empty:
         return 0
@@ -39,10 +39,10 @@ def upsert_curated(df, run_id: str) -> int:
     update_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     sql = f"""
-        INSERT INTO curated.sales_order_lines ({col_list})
+        INSERT INTO {table} ({col_list})
         VALUES ({placeholders})
         ON CONFLICT (order_id) DO UPDATE SET {update_clause}
-        WHERE curated.sales_order_lines.record_hash <> EXCLUDED.record_hash
+        WHERE {table}.record_hash <> EXCLUDED.record_hash
         RETURNING order_id
     """
     records = df[cols].to_dict(orient="records")
@@ -59,8 +59,9 @@ def upsert_curated(df, run_id: str) -> int:
 
 
 def load_partition(df, year: int, month: int, run_id: str) -> int:
-    subset = df[CURATED_COLUMNS]
-    rows_written = upsert_curated(subset, run_id)
+    """Load one verified partition. Returns rows actually written; the audit row
+    records the partition size (rows read), which is a different number."""
+    rows_written = upsert_curated(df[CURATED_COLUMNS], run_id)
 
     partition_key = f"{year:04d}-{month:02d}"
     with _connect() as conn:

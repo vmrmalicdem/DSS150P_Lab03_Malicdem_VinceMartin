@@ -1,5 +1,5 @@
 storage_type,file_size_bytes,write_seconds,full_read_seconds,filtered_read_seconds,row_count,notes
-csv,15276675,1.35047460000078,0.2987972999999329,0.2726603000000978,49897,filtered rows=8355
-json_lines,30707468,0.9250038000000131,0.7500488999994559,0.9093063999998776,49897,filtered rows=8355
-parquet_snappy,5466903,0.2639380999999048,0.082342200000312,0.05542830000013055,49897,filtered rows=8355
-postgresql,16564224,,0.8365254000000277,0.10327690000030998,49897,"size via pg_total_relation_size; filtered rows=8355; write time not comparable here, see load command timing"
+csv,15276675,1.2706073000008473,0.4449017999941134,0.38182790000428213,49897,all timings are medians of 5; filtered rows=8355
+json_lines,30707468,0.9960779000030016,1.0482409999967786,0.8100466000032611,49897,all timings are medians of 5; filtered rows=8355
+parquet_snappy,5466903,0.1848636000067927,0.06806379999761702,0.029110199997376185,49897,all timings are medians of 5; filtered rows=8355
+postgresql,16580608,6.250304200002574,0.5930995000016992,0.09705019999819342,49897,"all timings are medians of 5; size = pg_total_relation_size (table + indexes); write = pipeline UPSERT of the full dataset into an empty scratch table (includes connection and row conversion, so not a pure storage comparison); reads return python tuples, not a DataFrame; filtered rows=8355"

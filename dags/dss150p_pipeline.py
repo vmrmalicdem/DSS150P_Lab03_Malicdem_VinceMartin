@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timedelta
+from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.models.param import Param
 from airflow.operators.bash import BashOperator
@@ -28,6 +28,7 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     schedule="0 2 * * *",
     catchup=False,
+    max_active_runs=1,
     default_args=DEFAULT_ARGS,
     params={
         "run_mode": Param("full", enum=["full", "partition"]),

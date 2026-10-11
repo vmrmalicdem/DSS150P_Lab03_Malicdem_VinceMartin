@@ -1,5 +1,7 @@
 pandas==2.2.3
-pyarrow==17.0.0
+pyarrow==17.0.0; python_version < "3.13"
+pyarrow>=18.0.0; python_version >= "3.13"
 psycopg[binary]==3.2.3
 python-dotenv==1.0.1
 PyYAML==6.0.2
+pytest==8.3.3

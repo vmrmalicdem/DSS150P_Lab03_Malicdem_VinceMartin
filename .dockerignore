@@ -1,0 +1,11 @@
+logs/
+data/raw/
+data/staging/
+data/curated/
+data/quarantine/
+data/benchmarks/
+data/partitioned/
+.venv/
+__pycache__/
+*.pyc
+.git/

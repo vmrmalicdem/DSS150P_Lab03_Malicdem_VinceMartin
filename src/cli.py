@@ -11,7 +11,7 @@ from src.extract.files import extract_sources, safe_dirname
 from src.transform.staging import build_staging
 from src.transform.curated import build_curated
 from src.validate.quality import validate_curated
-from src.benchmark.storage import run_benchmark, write_partitioned_parquet
+from src.benchmark.storage import run_benchmark, write_partitioned_parquet, read_partition
 
 
 def current_run_id() -> str:
@@ -127,23 +127,21 @@ def main():
         run_id = current_run_id()
         curated_path = path_for("curated_dir") / "sales_order_lines.parquet"
         curated = pd.read_parquet(curated_path)
-        order_ts = pd.to_datetime(curated["order_timestamp"], utc=True)
-        curated["order_year"] = order_ts.dt.year
-        curated["order_month"] = order_ts.dt.month
 
+        # Always rebuild the partition tree from the current curated file so a
+        # stale tree from an earlier transform can never be loaded.
         partition_dir = path_for("partition_dir")
-        if not partition_dir.exists():
-            write_partitioned_parquet(curated.drop(columns=["order_year", "order_month"]), partition_dir)
+        write_partitioned_parquet(curated, partition_dir)
 
-        partition_df = pd.read_parquet(
-            partition_dir,
-            filters=[("order_year", "==", args.year), ("order_month", "==", args.month)],
-        )
+        partition_df = read_partition(partition_dir, args.year, args.month)
         if partition_df.empty:
             print(f"No rows found for partition {args.year}-{args.month:02d}")
             return
-        rows = load_partition(partition_df, args.year, args.month, run_id)
-        print(f"Loaded {rows} rows for partition {args.year}-{args.month:02d}")
+        written = load_partition(partition_df, args.year, args.month, run_id)
+        print(
+            f"Partition {args.year}-{args.month:02d}: {len(partition_df)} rows read and verified, "
+            f"{written} rows actually written"
+        )
         return
 
     if args.command == "run-all":
