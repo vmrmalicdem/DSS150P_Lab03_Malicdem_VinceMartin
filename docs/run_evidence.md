@@ -4,7 +4,7 @@ Machine: Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz, 16 GB RAM, Microsoft Windows 
 
 ## Week 4: environment
 - Python: Python 3.13.0 in .venv. requirements.txt pins pandas 2.2.3, pyarrow 17.0.0 (below Python 3.13) or 18 and up (3.13), psycopg 3.2.3, python-dotenv, PyYAML and pytest.
-- Git: remote on GitHub, full history in git log --oneline. The branch goal1-reproducible-environment was created retroactively. My first commits landed on master.
+- Git: remote on GitHub, full history in git log --oneline. Work started on master and the branch was renamed to main, which is the default branch. An early goal1-reproducible-environment branch was removed after its work was confirmed on main.
 - Docker: postgres:16 healthy on host port 5433 (container port 5432). Schemas audit, curated and staging exist. Tables: curated.sales_order_lines, audit.pipeline_runs, audit.partition_loads. The pipeline image builds and docker compose run --rm pipeline python -m src.cli validate-env succeeds.
 - Configuration: non-secret settings in config/settings.yml, secrets and per-machine values in .env (gitignored, .env.example committed). src/config.py is the only module that reads both. The compose files set POSTGRES_HOST and POSTGRES_PORT for containers.
 
@@ -17,6 +17,8 @@ Machine: Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz, 16 GB RAM, Microsoft Windows 
 - Rerun on unchanged data: load run twice, each reported 0 rows written out of 49,897 submitted. COUNT(*) and COUNT(DISTINCT order_id) were both 49,897.
 - Change detection: I set record_hash to a bogus value for 3 rows in Postgres and reran load, which wrote exactly 3. An earlier attempt that changed only status wrote 0. record_hash is stored and compared, not recomputed from the table, so the UPSERT detects changes in incoming source data, not manual edits to other columns.
 - Error handling: data problems go to quarantine with a reason. System failures raise exceptions. run-all records FAILED or SUCCESS with row counts in audit.pipeline_runs.
+- Source duplicates (pandas on data/source): 3 duplicate customer_id rows, 1 duplicate product_id row, 5 duplicate order_id rows (total rows minus unique keys). Dedupe keeps the latest updated_at.
+- Count reconciliation: raw 53,609 minus 9 duplicates (3 customers, 1 product, 5 orders) gives 53,600 unique rows. Row-level validation in staging removes 3 rows (1 invalid price product, 1 invalid quantity order, 1 invalid status order), leaving 53,597 (3,000 customers, 599 products, 49,998 orders). Referential checks at the curated stage remove 101 orders (100 orphan_product_reference, 1 orphan_customer_reference), leaving 49,897. Total quarantined: 3 + 101 = 104.
 
 ## Week 6: benchmark and partition
 - Benchmark table attached: yes, data/benchmarks/benchmark_results.csv. Medians of 5.
@@ -30,15 +32,16 @@ Machine: Intel(R) Core(TM) i7-8665U CPU @ 1.90GHz, 16 GB RAM, Microsoft Windows 
 
 ## Week 7: Airflow
 - DAG ID: dss150p_sales_pipeline
+- DAG graph: docs/screenshots/graph.png
 - Schedule: 0 2 * * * (daily 02:00 UTC). Source files refresh daily, and an off-hours run leaves fresh data for the morning.
 - catchup=False, because every run reads the same current source files, so backfilled runs would only reprocess identical data. max_active_runs=1, so runs queue instead of overlapping.
 - Retries: 2, with a 1 minute delay. Execution timeout: 10 minutes per task.
 - Parameters: run_mode (full or partition), year, month.
-- Full run on the final DAG (run_mode=full): manual__2026-10-10T15:52:52+00:00, success.
-- Overlap test: the same run was queued behind an active run and started when it finished (screenshot 06).
-- Partition run (run_mode=partition, 2026-01): manual__2026-09-23T07:36:10+00:00. load_partition ran, load_full was skipped, and the audit row carries this run ID.
-- Deliberate failure run: manual__2026-09-23T07:37:51+00:00. data/source/orders.csv was renamed away. extract failed with FileNotFoundError on tries 1 to 3, and the failure callback printed dag_run, task, try and exception on each failure.
+- Full run on the final DAG (run_mode=full): manual__2026-10-10T15:52:52+00:00, success. load_partition was skipped (docs/screenshots/load_partition-skipped.png).
+- Overlap test (max_active_runs=1): a second run triggered while one was active stayed queued and started only after the first finished (docs/screenshots/no-overlap-queued.png).
+- Partition run (run_mode=partition, 2026-01): manual__2026-09-23T07:36:10+00:00. load_partition ran, load_full was skipped (docs/screenshots/load_full-skipped.png), and the audit row carries this run ID.
+- Deliberate failure run: manual__2026-09-23T07:37:51+00:00. data/source/orders.csv was renamed away. extract failed with FileNotFoundError on tries 1 to 3, and the failure callback printed dag_run, task, try and exception on each failure (docs/screenshots/deliberate-failure.png).
 - Redone drill: manual__2026-09-23T08:35:59+00:00, the same pattern.
-- Recovery: orders.csv restored, extract cleared in the UI. In both runs extract succeeded on try 4 and the downstream tasks completed. No database cleanup was needed.
+- Recovery: orders.csv restored, extract cleared in the UI. extract succeeded on try 4 and the downstream tasks completed (docs/screenshots/after-failure.png).
 - Safe to rerun: extract (same run_id recopies the same files), transform (deterministic rebuild, atomic file replace), load (UPSERT with record_hash, 0 rows on unchanged data) and validate (read only).
 - Earlier failed runs (scheduled__2026-09-22, manual__2026-09-23T03:01:14, manual__2026-09-23T03:05:09) were real bugs, a missing helper function and the host port leaking into the containers. Both were fixed. They are not part of the drill.
